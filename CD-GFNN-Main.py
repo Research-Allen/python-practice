@@ -42,18 +42,17 @@ class SDGFNN:
 
     def __init__(
         self,
-        tau=0.80,
-        epsilon=0.008,
-        min_improvement=0.001,
+        tau=0.05,
+        epsilon=0.005,
+        min_improvement=0.0005,
         initial_neurons=8,
-        max_growth_rounds=10,
+        max_growth_rounds=25,
         random_state=0
     ):
 
         self.tau = tau
         self.epsilon = epsilon
         self.min_improvement = min_improvement
-
         self.initial_neurons = initial_neurons
         self.max_growth_rounds = max_growth_rounds
         self.random_state = random_state
@@ -64,10 +63,6 @@ class SDGFNN:
         self.best_neurons = None
         self.terminal_neurons = None
         self.growth_events = 0
-
-    # ======================================================
-    # TRAINING
-    # ======================================================
 
     def fit(
         self,
@@ -88,6 +83,9 @@ class SDGFNN:
 
         fib1 = 1
         fib2 = 1
+
+        print("\nGrowth Process")
+        print("-" * 70)
 
         for r in range(
             self.max_growth_rounds
@@ -115,11 +113,15 @@ class SDGFNN:
                 val_pred
             )
 
-            d_max = np.max(
+            divergence = (
                 compute_synaptic_divergence(
                     model,
                     X_val
                 )
+            )
+
+            d_max = np.max(
+                divergence
             )
 
             acc_gain = (
@@ -130,26 +132,25 @@ class SDGFNN:
 
             prev_acc = val_acc
 
-            # ----------------------------------
-            # SAVE BEST MODEL
-            # ----------------------------------
-
-            if val_acc > self.best_val_acc:
+            if (
+                val_acc >
+                self.best_val_acc
+            ):
 
                 self.best_val_acc = val_acc
                 self.best_model = model
                 self.best_neurons = neurons
 
             print(
-                f"R={r+1:02d} | "
-                f"N={neurons:3d} | "
-                f"Acc={val_acc:.4f} | "
-                f"D={d_max:.4f} | "
-                f"Gain={acc_gain:.5f}"
+                f"Round={r+1:02d} | "
+                f"Neurons={neurons:3d} | "
+                f"ValAcc={val_acc:.4f} | "
+                f"Dmax={d_max:.4f} | "
+                f"Gain={acc_gain:.6f}"
             )
 
             # ----------------------------------
-            # STOPPING CONDITIONS
+            # STOPPING RULES
             # ----------------------------------
 
             if d_max <= threshold:
@@ -157,37 +158,31 @@ class SDGFNN:
                 self.terminal_neurons = neurons
 
                 print(
-                    f"Stop: "
-                    f"D={d_max:.4f} "
-                    f"<= "
-                    f"{threshold:.4f}"
+                    f"\nSTOP: Dmax={d_max:.4f} "
+                    f"<= Threshold={threshold:.4f}"
                 )
 
                 break
 
             if (
-                r > 0 and
+                r > 0
+                and
                 acc_gain <= self.min_improvement
             ):
 
                 self.terminal_neurons = neurons
 
                 print(
-                    f"Stop: "
-                    f"Gain={acc_gain:.6f}"
+                    f"\nSTOP: Gain={acc_gain:.6f}"
                 )
 
                 break
 
-            # ----------------------------------
-            # FIBONACCI GROWTH
-            # ----------------------------------
-
-            self.growth_events += 1
+            old_neurons = neurons
 
             if r < 2:
 
-                neurons += 1
+                growth = 1
 
             else:
 
@@ -198,15 +193,15 @@ class SDGFNN:
                     growth
                 )
 
-                neurons += growth
+            neurons += growth
+
+            if neurons > old_neurons:
+
+                self.growth_events += 1
 
         if self.terminal_neurons is None:
 
             self.terminal_neurons = neurons
-
-    # ======================================================
-    # PREDICTION
-    # ======================================================
 
     def predict(self, X):
 
@@ -221,198 +216,137 @@ class SDGFNN:
 # DATA
 # ==========================================================
 
-data = load_breast_cancer()
-
-X = data.data
-y = data.target
+X, y = load_breast_cancer(
+    return_X_y=True
+)
 
 # ==========================================================
-# EXPERIMENTS
+# SINGLE EXPERIMENT
 # ==========================================================
 
-N_RUNS = 30
+seed = 42
 
-acc_list = []
-prec_list = []
-rec_list = []
-f1_list = []
-auc_list = []
-
-growth_list = []
-best_neuron_list = []
-terminal_neuron_list = []
-
-for seed in range(N_RUNS):
-
-    X_train_full, X_test, y_train_full, y_test = (
-        train_test_split(
-            X,
-            y,
-            test_size=0.20,
-            stratify=y,
-            random_state=seed
-        )
-    )
-
-    X_train, X_val, y_train, y_val = (
-        train_test_split(
-            X_train_full,
-            y_train_full,
-            test_size=0.20,
-            stratify=y_train_full,
-            random_state=seed
-        )
-    )
-
-    scaler = StandardScaler()
-
-    X_train = scaler.fit_transform(
-        X_train
-    )
-
-    X_val = scaler.transform(
-        X_val
-    )
-
-    X_test = scaler.transform(
-        X_test
-    )
-
-    model = SDGFNN(
-        tau=0.80,
-        epsilon=0.008,
-        min_improvement=0.001,
-        initial_neurons=8,
-        max_growth_rounds=10,
+X_train_full, X_test, y_train_full, y_test = (
+    train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        stratify=y,
         random_state=seed
     )
+)
 
-    model.fit(
-        X_train,
-        y_train,
-        X_val,
-        y_val
+X_train, X_val, y_train, y_val = (
+    train_test_split(
+        X_train_full,
+        y_train_full,
+        test_size=0.20,
+        stratify=y_train_full,
+        random_state=seed
     )
+)
 
-    pred = model.predict(
-        X_test
-    )
+scaler = StandardScaler()
 
-    prob = model.predict_proba(
-        X_test
-    )[:, 1]
+X_train = scaler.fit_transform(
+    X_train
+)
 
-    acc_list.append(
-        accuracy_score(
-            y_test,
-            pred
-        )
-    )
+X_val = scaler.transform(
+    X_val
+)
 
-    prec_list.append(
-        precision_score(
-            y_test,
-            pred,
-            average="weighted"
-        )
-    )
+X_test = scaler.transform(
+    X_test
+)
 
-    rec_list.append(
-        recall_score(
-            y_test,
-            pred,
-            average="weighted"
-        )
-    )
+# ==========================================================
+# TRAIN SD-GFNN
+# ==========================================================
 
-    f1_list.append(
-        f1_score(
-            y_test,
-            pred,
-            average="weighted"
-        )
-    )
+model = SDGFNN(
+    random_state=seed
+)
 
-    auc_list.append(
-        roc_auc_score(
-            y_test,
-            prob
-        )
-    )
+model.fit(
+    X_train,
+    y_train,
+    X_val,
+    y_val
+)
 
-    growth_list.append(
-        model.growth_events
-    )
+# ==========================================================
+# TEST
+# ==========================================================
 
-    best_neuron_list.append(
-        model.best_neurons
-    )
+pred = model.predict(
+    X_test
+)
 
-    terminal_neuron_list.append(
-        model.terminal_neurons
-    )
+prob = model.predict_proba(
+    X_test
+)[:, 1]
+
+accuracy = accuracy_score(
+    y_test,
+    pred
+)
+
+precision = precision_score(
+    y_test,
+    pred
+)
+
+recall = recall_score(
+    y_test,
+    pred
+)
+
+f1 = f1_score(
+    y_test,
+    pred
+)
+
+auc = roc_auc_score(
+    y_test,
+    prob
+)
 
 # ==========================================================
 # RESULTS
 # ==========================================================
 
-print("\n" + "=" * 70)
+print("\n")
+print("=" * 70)
 print("SD-GFNN RESULTS")
 print("=" * 70)
 
+print(f"Accuracy          : {accuracy:.4f}")
+print(f"Precision         : {precision:.4f}")
+print(f"Recall            : {recall:.4f}")
+print(f"F1 Score          : {f1:.4f}")
+print(f"ROC-AUC           : {auc:.4f}")
+
+print("-" * 70)
+
 print(
-    f"Accuracy Mean            : "
-    f"{np.mean(acc_list):.4f}"
+    f"Growth Events     : "
+    f"{model.growth_events}"
 )
 
 print(
-    f"Accuracy Std             : "
-    f"{np.std(acc_list):.4f}"
+    f"Best Neurons      : "
+    f"{model.best_neurons}"
 )
 
 print(
-    f"Precision Mean           : "
-    f"{np.mean(prec_list):.4f}"
+    f"Terminal Neurons  : "
+    f"{model.terminal_neurons}"
 )
 
 print(
-    f"Recall Mean              : "
-    f"{np.mean(rec_list):.4f}"
-)
-
-print(
-    f"F1 Mean                  : "
-    f"{np.mean(f1_list):.4f}"
-)
-
-print(
-    f"F1 Std                   : "
-    f"{np.std(f1_list):.4f}"
-)
-
-print(
-    f"ROC-AUC Mean             : "
-    f"{np.mean(auc_list):.4f}"
-)
-
-print(
-    f"ROC-AUC Std              : "
-    f"{np.std(auc_list):.4f}"
-)
-
-print(
-    f"Average Growth Events    : "
-    f"{np.mean(growth_list):.2f}"
-)
-
-print(
-    f"Average Best Neurons     : "
-    f"{np.mean(best_neuron_list):.2f}"
-)
-
-print(
-    f"Average Terminal Neurons : "
-    f"{np.mean(terminal_neuron_list):.2f}"
+    f"Best Val Accuracy : "
+    f"{model.best_val_acc:.4f}"
 )
 
 print("=" * 70)
