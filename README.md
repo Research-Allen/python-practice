@@ -9,6 +9,7 @@ No setup needed. Each badge opens the file in a free online Python editor and ru
 | File | |
 | --- | --- |
 | [`CD-GFNN-Main.py`](./CD-GFNN-Main.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=drdiaz-max/python-practice/main/CD-GFNN-Main.py) |
+| [`IRIS-WINE-DIGITS.py`](./IRIS-WINE-DIGITS.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=drdiaz-max/python-practice/main/IRIS-WINE-DIGITS.py) |
 | [`MLP-8-MLP-16-MLP-32.py`](./MLP-8-MLP-16-MLP-32.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=drdiaz-max/python-practice/main/MLP-8-MLP-16-MLP-32.py) |
 | [`dataset_VS_GFNN.py`](./dataset_VS_GFNN.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=drdiaz-max/python-practice/main/dataset_VS_GFNN.py) |
 
