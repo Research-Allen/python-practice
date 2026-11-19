@@ -2,6 +2,11 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import numpy as np
+import pandas as pd
+
+from scipy.stats import ttest_rel
+from scipy.stats import wilcoxon
+from scipy.stats import t
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
@@ -23,27 +28,17 @@ from sklearn.metrics import (
 
 def compute_synaptic_divergence(model, X):
 
-    hidden_input = (
-        np.dot(X, model.coefs_[0])
-        + model.intercepts_[0]
-    )
+    z = np.dot(X, model.coefs_[0]) + model.intercepts_[0]
 
-    hidden_output = np.tanh(
-        hidden_input
-    )
+    h = np.tanh(z)
 
-    mean_activation = np.mean(
-        hidden_output,
-        axis=0
-    )
+    h_mean = np.mean(h, axis=0)
 
     return np.mean(
-        np.abs(
-            hidden_output -
-            mean_activation
-        ),
+        np.abs(h - h_mean),
         axis=0
     )
+
 
 # ==========================================================
 # SD-GFNN
@@ -53,18 +48,17 @@ class SDGFNN:
 
     def __init__(
         self,
-        tau=0.80,
-        epsilon=0.008,
-        min_improvement=0.001,
+        tau=0.10,
+        epsilon=0.01,
+        min_improvement=0.0005,
         initial_neurons=8,
-        max_growth_rounds=10,
+        max_growth_rounds=15,
         random_state=0
     ):
 
         self.tau = tau
         self.epsilon = epsilon
         self.min_improvement = min_improvement
-
         self.initial_neurons = initial_neurons
         self.max_growth_rounds = max_growth_rounds
         self.random_state = random_state
@@ -74,7 +68,6 @@ class SDGFNN:
 
         self.best_neurons = None
         self.terminal_neurons = None
-
         self.growth_events = 0
 
     def fit(
@@ -87,19 +80,14 @@ class SDGFNN:
 
         neurons = self.initial_neurons
 
-        threshold = (
-            self.tau +
-            self.epsilon
-        )
+        threshold = self.tau + self.epsilon
 
         prev_acc = None
 
         fib1 = 1
         fib2 = 1
 
-        for r in range(
-            self.max_growth_rounds
-        ):
+        for r in range(self.max_growth_rounds):
 
             model = MLPClassifier(
                 hidden_layer_sizes=(neurons,),
@@ -114,9 +102,7 @@ class SDGFNN:
                 y_train
             )
 
-            val_pred = model.predict(
-                X_val
-            )
+            val_pred = model.predict(X_val)
 
             val_acc = accuracy_score(
                 y_val,
@@ -138,34 +124,17 @@ class SDGFNN:
 
             prev_acc = val_acc
 
-            # ==================================
-            # BEST MODEL
-            # ==================================
-
-            if val_acc > self.best_val_acc:
+            if (
+                val_acc > self.best_val_acc
+            ):
 
                 self.best_val_acc = val_acc
-
                 self.best_model = model
-
                 self.best_neurons = neurons
-
-            print(
-                f"R={r+1:02d} | "
-                f"N={neurons:3d} | "
-                f"Acc={val_acc:.4f} | "
-                f"D={d_max:.4f} | "
-                f"Gain={acc_gain:.5f}"
-            )
-
-            # ==================================
-            # STOP CRITERION
-            # ==================================
 
             if d_max <= threshold:
 
                 self.terminal_neurons = neurons
-
                 break
 
             if (
@@ -175,33 +144,29 @@ class SDGFNN:
             ):
 
                 self.terminal_neurons = neurons
-
                 break
 
-            # ==================================
-            # FIBONACCI GROWTH
-            # ==================================
+            old_neurons = neurons
 
             if r < 2:
 
-                growth_size = 1
+                neurons += 1
 
             else:
 
-                growth_size = fib1 + fib2
+                growth = fib1 + fib2
 
                 fib1, fib2 = (
                     fib2,
-                    growth_size
+                    growth
                 )
 
-            neurons += growth_size
+                neurons += growth
 
-            # TRUE GROWTH EVENT COUNT
-            self.growth_events += 1
+            if neurons > old_neurons:
+                self.growth_events += 1
 
         if self.terminal_neurons is None:
-
             self.terminal_neurons = neurons
 
     def predict(self, X):
@@ -211,6 +176,155 @@ class SDGFNN:
     def predict_proba(self, X):
 
         return self.best_model.predict_proba(X)
+
+
+# ==========================================================
+# EVALUATION
+# ==========================================================
+
+def evaluate_model(
+    model,
+    X_test,
+    y_test
+):
+
+    pred = model.predict(X_test)
+
+    prob = model.predict_proba(
+        X_test
+    )[:, 1]
+
+    return {
+        "Accuracy":
+            accuracy_score(
+                y_test,
+                pred
+            ),
+        "Precision":
+            precision_score(
+                y_test,
+                pred,
+                average="weighted"
+            ),
+        "Recall":
+            recall_score(
+                y_test,
+                pred,
+                average="weighted"
+            ),
+        "F1":
+            f1_score(
+                y_test,
+                pred,
+                average="weighted"
+            ),
+        "ROC_AUC":
+            roc_auc_score(
+                y_test,
+                prob
+            )
+    }
+
+
+# ==========================================================
+# STATISTICS
+# ==========================================================
+
+def cohen_d_paired(a, b):
+
+    diff = np.array(a) - np.array(b)
+
+    return (
+        np.mean(diff)
+        /
+        np.std(diff, ddof=1)
+    )
+
+
+def confidence_interval(
+    values,
+    alpha=0.05
+):
+
+    values = np.array(values)
+
+    n = len(values)
+
+    mean = np.mean(values)
+
+    se = (
+        np.std(values, ddof=1)
+        /
+        np.sqrt(n)
+    )
+
+    tcrit = t.ppf(
+        1 - alpha / 2,
+        n - 1
+    )
+
+    return (
+        mean - tcrit * se,
+        mean + tcrit * se
+    )
+
+
+def compare_models(
+    sd_scores,
+    baseline_scores,
+    baseline_name
+):
+
+    t_stat, p_t = ttest_rel(
+        sd_scores,
+        baseline_scores
+    )
+
+    try:
+
+        w_stat, p_w = wilcoxon(
+            sd_scores,
+            baseline_scores
+        )
+
+    except:
+
+        w_stat = np.nan
+        p_w = np.nan
+
+    effect = cohen_d_paired(
+        sd_scores,
+        baseline_scores
+    )
+
+    diff = (
+        np.array(sd_scores)
+        -
+        np.array(baseline_scores)
+    )
+
+    ci_low, ci_high = confidence_interval(
+        diff
+    )
+
+    return [
+
+        baseline_name,
+
+        np.mean(diff),
+
+        p_t,
+
+        p_w,
+
+        effect,
+
+        ci_low,
+
+        ci_high
+
+    ]
+
 
 # ==========================================================
 # DATA
@@ -222,15 +336,18 @@ X, y = load_breast_cancer(
 
 N_RUNS = 30
 
-acc_list = []
-prec_list = []
-rec_list = []
-f1_list = []
-auc_list = []
+results = {
 
-growth_list = []
-best_neuron_list = []
-terminal_neuron_list = []
+    "SD-GFNN": [],
+    "MLP(8)": [],
+    "MLP(16)": [],
+    "MLP(32)": []
+
+}
+
+growth_events = []
+best_neurons = []
+terminal_neurons = []
 
 # ==========================================================
 # EXPERIMENTS
@@ -260,103 +377,228 @@ for seed in range(N_RUNS):
 
     scaler = StandardScaler()
 
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
+    X_train = scaler.fit_transform(
+        X_train
+    )
 
-    model = SDGFNN(
+    X_val = scaler.transform(
+        X_val
+    )
+
+    X_test = scaler.transform(
+        X_test
+    )
+
+    # SD-GFNN
+
+    sdgfnn = SDGFNN(
         random_state=seed
     )
 
-    model.fit(
+    sdgfnn.fit(
         X_train,
         y_train,
         X_val,
         y_val
     )
 
-    pred = model.predict(
-        X_test
-    )
-
-    prob = model.predict_proba(
-        X_test
-    )[:, 1]
-
-    acc_list.append(
-        accuracy_score(
-            y_test,
-            pred
+    results["SD-GFNN"].append(
+        evaluate_model(
+            sdgfnn,
+            X_test,
+            y_test
         )
     )
 
-    prec_list.append(
-        precision_score(
-            y_test,
-            pred,
-            average="weighted"
+    growth_events.append(
+        sdgfnn.growth_events
+    )
+
+    best_neurons.append(
+        sdgfnn.best_neurons
+    )
+
+    terminal_neurons.append(
+        sdgfnn.terminal_neurons
+    )
+
+    # MLP BASELINES
+
+    for h in [8, 16, 32]:
+
+        mlp = MLPClassifier(
+            hidden_layer_sizes=(h,),
+            activation="tanh",
+            solver="adam",
+            max_iter=1000,
+            random_state=seed
         )
-    )
 
-    rec_list.append(
-        recall_score(
-            y_test,
-            pred,
-            average="weighted"
+        mlp.fit(
+            X_train,
+            y_train
         )
-    )
 
-    f1_list.append(
-        f1_score(
-            y_test,
-            pred,
-            average="weighted"
+        name = f"MLP({h})"
+
+        results[name].append(
+            evaluate_model(
+                mlp,
+                X_test,
+                y_test
+            )
         )
-    )
-
-    auc_list.append(
-        roc_auc_score(
-            y_test,
-            prob
-        )
-    )
-
-    growth_list.append(
-        model.growth_events
-    )
-
-    best_neuron_list.append(
-        model.best_neurons
-    )
-
-    terminal_neuron_list.append(
-        model.terminal_neurons
-    )
 
 # ==========================================================
-# RESULTS
+# PERFORMANCE TABLE
 # ==========================================================
 
-print("\n" + "=" * 70)
-print("SD-GFNN RESULTS")
-print("=" * 70)
+perf_rows = []
 
-print(f"Accuracy Mean            : {np.mean(acc_list):.4f}")
-print(f"Accuracy Std             : {np.std(acc_list):.4f}")
+for model_name in results:
 
-print(f"Precision Mean           : {np.mean(prec_list):.4f}")
-print(f"Recall Mean              : {np.mean(rec_list):.4f}")
+    acc = [
+        x["Accuracy"]
+        for x in results[model_name]
+    ]
 
-print(f"F1 Mean                  : {np.mean(f1_list):.4f}")
-print(f"F1 Std                   : {np.std(f1_list):.4f}")
+    prec = [
+        x["Precision"]
+        for x in results[model_name]
+    ]
 
-print(f"ROC-AUC Mean             : {np.mean(auc_list):.4f}")
-print(f"ROC-AUC Std              : {np.std(auc_list):.4f}")
+    rec = [
+        x["Recall"]
+        for x in results[model_name]
+    ]
 
-print(f"Average Growth Events    : {np.mean(growth_list):.2f}")
+    f1 = [
+        x["F1"]
+        for x in results[model_name]
+    ]
 
-print(f"Average Best Neurons     : {np.mean(best_neuron_list):.2f}")
+    auc = [
+        x["ROC_AUC"]
+        for x in results[model_name]
+    ]
 
-print(f"Average Terminal Neurons : {np.mean(terminal_neuron_list):.2f}")
+    perf_rows.append([
 
-print("=" * 70)
+        model_name,
+
+        f"{np.mean(acc):.4f} ± {np.std(acc):.4f}",
+
+        f"{np.mean(prec):.4f}",
+
+        f"{np.mean(rec):.4f}",
+
+        f"{np.mean(f1):.4f}",
+
+        f"{np.mean(auc):.4f}"
+
+    ])
+
+perf_df = pd.DataFrame(
+
+    perf_rows,
+
+    columns=[
+
+        "Model",
+        "Accuracy",
+        "Precision",
+        "Recall",
+        "F1",
+        "ROC-AUC"
+    ]
+)
+
+print("\n")
+print("=" * 100)
+print("PERFORMANCE RESULTS")
+print("=" * 100)
+print(perf_df.to_string(index=False))
+
+# ==========================================================
+# SIGNIFICANCE TESTS
+# ==========================================================
+
+sd_acc = [
+    r["Accuracy"]
+    for r in results["SD-GFNN"]
+]
+
+stats_rows = []
+
+for baseline in [
+
+    "MLP(8)",
+    "MLP(16)",
+    "MLP(32)"
+
+]:
+
+    baseline_acc = [
+
+        r["Accuracy"]
+        for r in results[baseline]
+
+    ]
+
+    stats_rows.append(
+
+        compare_models(
+            sd_acc,
+            baseline_acc,
+            baseline
+        )
+
+    )
+
+stats_df = pd.DataFrame(
+
+    stats_rows,
+
+    columns=[
+
+        "Baseline",
+        "Mean Diff",
+        "Paired t-test p",
+        "Wilcoxon p",
+        "Cohen d",
+        "95% CI Lower",
+        "95% CI Upper"
+    ]
+)
+
+print("\n")
+print("=" * 100)
+print("STATISTICAL COMPARISON: SD-GFNN vs BASELINES")
+print("=" * 100)
+print(stats_df.to_string(index=False))
+
+# ==========================================================
+# SD-GFNN STRUCTURAL RESULTS
+# ==========================================================
+
+print("\n")
+print("=" * 100)
+print("SD-GFNN STRUCTURE")
+print("=" * 100)
+
+print(
+    f"Average Growth Events    : "
+    f"{np.mean(growth_events):.2f}"
+)
+
+print(
+    f"Average Best Neurons     : "
+    f"{np.mean(best_neurons):.2f}"
+)
+
+print(
+    f"Average Terminal Neurons : "
+    f"{np.mean(terminal_neurons):.2f}"
+)
+
+print("=" * 100)
