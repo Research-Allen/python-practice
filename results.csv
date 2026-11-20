@@ -12,20 +12,16 @@ Breast Cancer,SD-GFNN,97.72,1.53,97.77,97.72,97.71,,99.46,,1.27,8.27,9.27
 Breast Cancer,MLP(8),97.75,1.48,97.8,97.75,97.74,,99.46,,0.0,8.0,8.0
 Breast Cancer,MLP(16),97.4,1.54,97.46,97.4,97.39,,99.48,,0.0,16.0,16.0
 Breast Cancer,MLP(32),97.63,1.28,97.68,97.63,97.62,,99.47,,0.0,32.0,32.0
-=== RESULTS OVER 30 RUNS ===
-Single      Mean=0.9462 Std=0.0121 CI95=[0.9419,0.9505]
-Linear      Mean=0.9758 Std=0.0060 CI95=[0.9737,0.9780]
-Fibonacci   Mean=0.9776 Std=0.0071 CI95=[0.9751,0.9801]
-Exponential Mean=0.9816 Std=0.0046 CI95=[0.9799,0.9832]
-=== PAIRED T-TESTS ===
-Fib vs Single     t=14.7545 p=0.000000
-Fib vs Linear     t=1.5847 p=0.123889
-Fib vs Exp        t=-4.1991 p=0.000232
-=== WILCOXON ===
-Fib vs Single     W=0.0000 p=0.000000
-Fib vs Linear     W=102.5000 p=0.171422
-Fib vs Exp        W=34.5000 p=0.000526
-=== EFFECT SIZE ===
-Fib vs Single     d=2.7398
-Fib vs Linear     d=0.2943
-Fib vs Exp        d=-0.7798
+30 RUNSSingle      Mean=0.9462 Std=0.0121 CI95=[0.9419,0.9505]
+30 RUNSLinear      Mean=0.9758 Std=0.0060 CI95=[0.9737,0.9780]
+30 RUNSFibonacci   Mean=0.9776 Std=0.0071 CI95=[0.9751,0.9801]
+30 RUNSExponential Mean=0.9816 Std=0.0046 CI95=[0.9799,0.9832]
+T-TESTS Fib vs Single     t=14.7545 p=0.000000
+T-TESTS Fib vs Linear     t=1.5847 p=0.123889
+T-TESTS Fib vs Exp        t=-4.1991 p=0.000232
+WILCOXON Fib vs Single     W=0.0000 p=0.000000
+WILCOXON Fib vs Linear     W=102.5000 p=0.171422
+WILCOXON Fib vs Exp        W=34.5000 p=0.000526
+EFFECT SIZE Fib vs Single     d=2.7398
+EFFECT SIZE Fib vs Linear     d=0.2943
+EFFECT SIZE Fib vs Exp        d=-0.7798
