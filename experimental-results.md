@@ -57,3 +57,27 @@ Round=04 | Neurons= 12 | ValAcc=0.9670 | Dmax=0.8311 | Gain=-0.021978
 
 STOP: Gain=-0.021978 (Best Checkpoint Retained: 10 Hidden Neurons, ValAcc=0.9890)
 ```
+=== RESULTS OVER 30 RUNS ===
+
+Single      Mean=0.9462 Std=0.0121 CI95=[0.9419,0.9505]
+Linear      Mean=0.9758 Std=0.0060 CI95=[0.9737,0.9780]
+Fibonacci   Mean=0.9776 Std=0.0071 CI95=[0.9751,0.9801]
+Exponential Mean=0.9816 Std=0.0046 CI95=[0.9799,0.9832]
+
+=== PAIRED T-TESTS ===
+
+Fib vs Single     t=14.7545 p=0.000000
+Fib vs Linear     t=1.5847 p=0.123889
+Fib vs Exp        t=-4.1991 p=0.000232
+
+=== WILCOXON ===
+
+Fib vs Single     W=0.0000 p=0.000000
+Fib vs Linear     W=102.5000 p=0.171422
+Fib vs Exp        W=34.5000 p=0.000526
+
+=== EFFECT SIZE ===
+
+Fib vs Single     d=2.7398
+Fib vs Linear     d=0.2943
+Fib vs Exp        d=-0.7798
