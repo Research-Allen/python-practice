@@ -1,7 +1,5 @@
 # SD-GFNN Consolidated Experimental Results
 
-This document compiles all verified benchmark metrics, structural growth statistics, statistical significance tests, and execution traces across **30 independent runs** (`seeds 0..29`) for the **Synaptic Divergence-Guided Growing Feedforward Neural Network (SD-GFNN)**.
-
 ---
 
 ## 1. SD-GFNN Classification & Structural Adaptation Summary (30 Independent Runs)
