@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+title: "A Synaptic Divergence-Guided Growing Feedforward Neural Network via Topological Adaptation"
+message: "If you use this software, please cite the associated manuscript."
+authors:
+  - family-names: Nurmagambetov
+    given-names: Dias
+    orcid: https://orcid.org/0000-0002-9903-896X
+  - family-names: Eset
+    given-names: Allen
+    orcid: https://orcid.org/0000-0001-8754-9343
+  - family-names: Eset
+    given-names: Isaiah
+    orcid: https://orcid.org/0009-0006-3871-4748
+repository-code: https://github.com/Qazak/python-practice
+license: MIT
