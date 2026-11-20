@@ -1,0 +1,22 @@
+Dataset,Model,Accuracy_Mean,Accuracy_Std,Precision_Mean,Recall_Mean,F1_Mean,F1_Std,ROC_AUC_Mean,ROC_AUC_Std,Avg_Growth_Events,Avg_Best_Neurons,Avg_Terminal_Nodes,Declaration_Section,Declaration_Text
+Iris,SD-GFNN,96.22,3.41,96.68,96.22,96.18,3.49,99.67,0.7,1.13,8.13,9.13,,
+Iris,Random Forest (300),95.78,3.84,96.24,95.78,95.74,3.89,99.63,0.5,,,,,
+Iris,XGBoost (300),93.44,3.6,93.97,93.44,93.4,3.65,98.43,1.66,,,,,
+Wine,SD-GFNN,97.22,3.21,97.45,97.22,97.2,3.27,99.83,0.3,1.13,8.13,9.13,,
+Wine,Random Forest (300),98.52,1.56,98.64,98.52,98.52,1.57,99.94,0.14,,,,,
+Wine,XGBoost (300),98.24,1.68,98.4,98.24,98.25,1.67,99.9,0.2,,,,,
+Digits,SD-GFNN,94.94,1.06,95.09,94.94,94.93,1.06,99.7,0.14,2.2,9.6,11.3,,
+Digits,Random Forest (300),97.68,0.61,97.74,97.68,97.67,0.62,99.95,0.02,,,,,
+Digits,XGBoost (300),97.22,0.77,97.3,97.22,97.22,0.77,99.95,0.03,,,,,
+Breast Cancer,SD-GFNN,97.72,1.53,97.77,97.72,97.71,,99.46,,1.27,8.27,9.27,,
+Breast Cancer,MLP(8),97.75,1.48,97.8,97.75,97.74,,99.46,,0.0,8.0,8.0,,
+Breast Cancer,MLP(16),97.4,1.54,97.46,97.4,97.39,,99.48,,0.0,16.0,16.0,,
+Breast Cancer,MLP(32),97.63,1.28,97.68,97.63,97.62,,99.47,,0.0,32.0,32.0,,
+DECLARATION,,,,,,,,,,,,,Funding,"The authors declare that no funds, grants, or other financial support were received for the conduct of this study, the preparation of the manuscript, or the publication of this work."
+DECLARATION,,,,,,,,,,,,,Competing Interests,The authors declare that they have no known competing financial interests or personal relationships that could have appeared to influence the work reported in this paper.
+DECLARATION,,,,,,,,,,,,,Author Contributions,"Dias Nurmagambetov: Conceptualization, Methodology, Formal Analysis, Theoretical Development, Investigation, Writing - Original Draft, Supervision. Allen Eset: Data Curation, Experimental Validation, Statistical Analysis, Validation, Writing - Review and Editing. Isaiah Eset: Software Development, Implementation, Investigation, Validation, Visualization. All authors read and approved the final manuscript."
+DECLARATION,,,,,,,,,,,,,Data Availability,"All benchmark datasets used in this study, including Iris, Breast Cancer Wisconsin, Wine, and Digits, are publicly available through the scikit-learn repository. The Fashion-MNIST dataset is publicly available through Zalando Research. The datasets analyzed during the current study are available from publicly accessible repositories."
+DECLARATION,,,,,,,,,,,,,Code Availability,"The source code, experimental scripts, and random-seed configurations required to reproduce the results reported in this paper are publicly available at: https://github.com/Qazak/python-practice"
+DECLARATION,,,,,,,,,,,,,Ethics Approval,Not applicable.
+DECLARATION,,,,,,,,,,,,,Consent to Participate,Not applicable.
+DECLARATION,,,,,,,,,,,,,Consent for Publication,Not applicable.
