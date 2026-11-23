@@ -7,6 +7,7 @@ No setup needed. Each badge opens the file in a free online Python editor and ru
 
 | File | |
 | --- | --- |
+| [`SD-GFNN-vs-CC-vs-DNC.py`](./SD-GFNN-vs-CC-vs-DNC.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/SD-GFNN-vs-CC-vs-DNC.py) |
 | [`SD-GFNN-vs-CC.py`](./SD-GFNN-vs-CC.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/SD-GFNN-vs-CC.py) |
 
 Made with [pythoncompiler.io](https://pythoncompiler.io/?utm_source=github&utm_medium=practice-repo) - the free online Python compiler.
