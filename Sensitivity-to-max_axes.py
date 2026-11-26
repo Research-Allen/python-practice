@@ -11,97 +11,7 @@ warnings.filterwarnings("ignore")
 
 N_SPLITS = 15
 
-# =============================================================================
-# EXPERIMENT 1
-# MAX_AXES SENSITIVITY
-# =============================================================================
 
-def run_max_axes_sensitivity():
-
-    print("\n")
-    print("=" * 90)
-    print("MAX_AXES SENSITIVITY (UCI DIGITS)")
-    print("=" * 90)
-
-    X = load_digits().data
-    y = load_digits().target
-
-    axes_grid = [
-        8,
-        16,
-        24,
-        32,
-        40,
-        48
-    ]
-
-    for max_axes in axes_grid:
-
-        acc_all = []
-        f1_all = []
-        links_all = []
-
-        splitter = StratifiedShuffleSplit(
-            n_splits=5,
-            test_size=0.20,
-            random_state=42
-        )
-
-        for seed, (tr, te) in enumerate(
-            splitter.split(X, y)
-        ):
-
-            scaler = StandardScaler()
-
-            X_tr = scaler.fit_transform(X[tr])
-            X_te = scaler.transform(X[te])
-
-            y_tr = y[tr]
-            y_te = y[te]
-
-            model = OptimalCrossTowerAGNN(
-                output_dim=len(np.unique(y)),
-                max_axes=max_axes,
-                max_units=45,
-                learning_rate=0.05,
-                conn_selector="hybrid_golden",
-                residual_mode="prob_gap",
-                seed=seed
-            )
-
-            model.fit(X_tr, y_tr)
-
-            preds = model.predict(X_te)
-
-            stats = model.get_topology_stats()
-
-            acc_all.append(
-                accuracy_score(
-                    y_te,
-                    preds
-                )
-            )
-
-            f1_all.append(
-                f1_score(
-                    y_te,
-                    preds,
-                    average="macro"
-                )
-            )
-
-            links_all.append(
-                stats["active_links"]
-            )
-
-        print(
-            f"max_axes={max_axes:2d} | "
-            f"Acc={np.mean(acc_all):.4f} ± {np.std(acc_all):.4f} | "
-            f"F1={np.mean(f1_all):.4f} | "
-            f"Links={np.mean(links_all):.1f}"
-        )
-
-    print("=" * 90)
 # ==============================================================================
 # 1. CORE PRIMITIVES & SYNTHETIC BENCHMARK GENERATOR
 # ==============================================================================
@@ -265,8 +175,8 @@ class OptimalCrossTowerAGNN:
     self.lr = learning_rate
     self.sparsity_penalty = sparsity_penalty
     self.max_bridges_per_unit = max_bridges_per_unit
-    self.conn_selector = conn_selector  # "hybrid_golden" | "omp"
-    self.residual_mode = residual_mode  # "prob_gap" | "margin"
+    self.conn_selector = conn_selector
+    self.residual_mode = residual_mode
     self.seed = seed
 
   def _init_graph(self, base_dim):
@@ -511,7 +421,6 @@ class OptimalCrossTowerAGNN:
           centers[:, None, :] - centers[None, :, :], axis=2
       )
       nonzero = pair_dists[pair_dists > 0]
-      # [PATCH v2.3] Bounded sigma_zone in [0.5, 5.0]
       sigma_zone = (
           float(np.clip(np.percentile(nonzero, 30), 0.5, 5.0))
           if len(nonzero) > 0
@@ -781,7 +690,6 @@ class OptimalCrossTowerAGNN:
           continue
 
         num = np.mean(a_src * dz_dst)
-        # [PATCH v2.3] Upper cap of 10.0 on normalized bridge score
         grad_score = min(abs(float(num / (std_src * std_dst))), 10.0)
 
         level_bonus = 1.25 if u_src["level"] == u_dst["level"] else 1.0
@@ -1323,7 +1231,64 @@ class BaselineMLP32:
 
 
 # ==============================================================================
-# 5. FULL Q2 BENCHMARK & LATEX TABLE GENERATOR (TABLES 1-4)
+# 5. EXPERIMENT 1: MAX_AXES SENSITIVITY (INCLUDING 48, 56, 64)
+# ==============================================================================
+def run_max_axes_sensitivity():
+  print("\n" + "=" * 90)
+  print("MAX_AXES SENSITIVITY (UCI DIGITS)")
+  print("=" * 90)
+
+  X = load_digits().data
+  y = load_digits().target
+
+  axes_grid = [8, 16, 24, 32, 40, 48, 56, 64]
+
+  for max_axes in axes_grid:
+    acc_all = []
+    f1_all = []
+    links_all = []
+
+    splitter = StratifiedShuffleSplit(
+        n_splits=5, test_size=0.20, random_state=42
+    )
+
+    for seed, (tr, te) in enumerate(splitter.split(X, y)):
+      scaler = StandardScaler()
+      X_tr = scaler.fit_transform(X[tr])
+      X_te = scaler.transform(X[te])
+      y_tr = y[tr]
+      y_te = y[te]
+
+      model = OptimalCrossTowerAGNN(
+          output_dim=len(np.unique(y)),
+          max_axes=max_axes,
+          max_units=45,
+          learning_rate=0.05,
+          conn_selector="hybrid_golden",
+          residual_mode="prob_gap",
+          seed=seed,
+      )
+      model.fit(X_tr, y_tr)
+      preds = model.predict(X_te)
+      stats = model.get_topology_stats()
+
+      acc_all.append(accuracy_score(y_te, preds))
+      f1_all.append(f1_score(y_te, preds, average="macro"))
+      links_all.append(stats["active_links"])
+
+    print(
+        f"max_axes={max_axes:2d} | "
+        f"Acc={np.mean(acc_all):.4f} ± {np.std(acc_all):.4f} | "
+        f"F1={np.mean(f1_all):.4f} | "
+        f"Links={np.mean(links_all):.1f}",
+        flush=True,
+    )
+
+  print("=" * 90)
+
+
+# ==============================================================================
+# 6. FULL Q2 BENCHMARK (UCI DIGITS UPDATED TO max_axes = 48)
 # ==============================================================================
 def format_stat_sig(agnn_arr, base_arr):
   diff = agnn_arr - base_arr
@@ -1345,8 +1310,8 @@ def format_stat_sig(agnn_arr, base_arr):
   return f"{wins}/{ties}/{losses}", f"{p_w:.4f}{sig_mark}"
 
 
-def run_full_q2_benchmark():
-  datasets = {
+def run_full_q2_benchmark(only_digits=False):
+  all_datasets = {
       "Two Spirals (32D)": (*make_two_spirals(seed=42), 20, 0.04),
       "Iris (4D)": (load_iris().data, load_iris().target, 4, 0.04),
       "Breast Cancer (30D)": (
@@ -1359,10 +1324,16 @@ def run_full_q2_benchmark():
       "UCI Digits (64D)": (
           load_digits().data,
           load_digits().target,
-          24,
+          48,  # Updated from 24 to 48
           0.05,
       ),
   }
+
+  datasets = (
+      {"UCI Digits (64D)": all_datasets["UCI Digits (64D)"]}
+      if only_digits
+      else all_datasets
+  )
 
   models_order = ["AGNN", "CasCor", "MLP32", "MagPrune"]
   models_latex = {
@@ -1572,30 +1543,11 @@ def run_full_q2_benchmark():
     print(f"[OK] Completed dataset: {ds_name} ({N_SPLITS} splits)", flush=True)
 
   # ==========================================================================
-  # TABLE 1: PREDICTIVE PERFORMANCE & STATISTICAL SIGNIFICANCE (LATEX)
+  # PRINT LATEX ROWS FOR TABLES 1-4
   # ==========================================================================
   print("\n" + "%" * 90)
-  print("% TABLE 1: PREDICTIVE PERFORMANCE & WILCOXON SIGNIFICANCE")
+  print("% TABLE 1 ROWS (PREDICTIVE PERFORMANCE & WILCOXON SIGNIFICANCE)")
   print("%" * 90)
-  print(r"\begin{table*}[t]")
-  print(r"\centering")
-  print(
-      r"\caption{Classification accuracy, Macro-F1, and paired Wilcoxon"
-      r" signed-rank significance across "
-      + str(N_SPLITS)
-      + r" stratified splits ($\text{Mean} \pm \text{Std}$).}"
-  )
-  print(r"\label{tab:benchmark_accuracy}")
-  print(r"\resizebox{\textwidth}{!}{%")
-  print(r"\begin{tabular}{llcccc}")
-  print(r"\toprule")
-  print(
-      r"\textbf{Dataset} & \textbf{Method} & \textbf{Test Accuracy} &"
-      r" \textbf{Macro-F1} & \textbf{W / T / L} & \textbf{Wilcoxon $p$-val}"
-      r" \\"
-  )
-  print(r"\midrule")
-
   for ds_name, ds_res in all_results.items():
     agnn_acc = np.array(ds_res["AGNN"]["acc"])
     for idx_m, m in enumerate(models_order):
@@ -1616,36 +1568,10 @@ def run_full_q2_benchmark():
           f" {p_str} \\\\"
       )
     print(r"\midrule")
-  print(r"\bottomrule")
-  print(r"\end{tabular}}")
-  print(r"\end{table*}")
 
-  # ==========================================================================
-  # TABLE 2: HARDWARE & STRUCTURAL EFFICIENCY (LATEX)
-  # ==========================================================================
   print("\n" + "%" * 90)
-  print("% TABLE 2: STRUCTURAL SPARSITY, ACTIVE CONNECTIONS & LATENCY")
+  print("% TABLE 2 ROWS (ACTIVE CONNECTIONS, BRIDGES, BYTES & LATENCY)")
   print("%" * 90)
-  print(r"\begin{table*}[t]")
-  print(r"\centering")
-  print(
-      r"\caption{Structural complexity, active connections, cross-tower"
-      r" bridges, parameter footprint (Bytes, float64), and inference latency"
-      r" across "
-      + str(N_SPLITS)
-      + r" splits.}"
-  )
-  print(r"\label{tab:hardware_efficiency}")
-  print(r"\resizebox{\textwidth}{!}{%")
-  print(r"\begin{tabular}{llccccc}")
-  print(r"\toprule")
-  print(
-      r"\textbf{Dataset} & \textbf{Method} & \textbf{Active Links} &"
-      r" \textbf{Bridges} & \textbf{Size (Bytes)} & \textbf{Train (s)} &"
-      r" \textbf{Infer (ms)} \\"
-  )
-  print(r"\midrule")
-
   for ds_name, ds_res in all_results.items():
     for idx_m, m in enumerate(models_order):
       ds_col = f"\\multirow{{4}}{{*}}{{\\textbf{{{ds_name}}}}}" if idx_m == 0 else ""
@@ -1659,31 +1585,10 @@ def run_full_q2_benchmark():
           f" & {tr_s:.2f} & {inf_m:.3f} \\\\"
       )
     print(r"\midrule")
-  print(r"\bottomrule")
-  print(r"\end{tabular}}")
-  print(r"\end{table*}")
 
-  # ==========================================================================
-  # TABLE 3: CONSTRUCTIVE SPARSITY (BEFORE VS AFTER POST-PRUNING)
-  # ==========================================================================
   print("\n" + "%" * 90)
-  print("% TABLE 3: PRE-PRUNING VS POST-PRUNING STRUCTURAL PROFILE")
+  print("% TABLE 3 ROWS (PRE-PRUNING VS POST-PRUNING)")
   print("%" * 90)
-  print(r"\begin{table}[t]")
-  print(r"\centering")
-  print(
-      r"\caption{Constructive sparsity of \texttt{OptimalCrossTowerAGNN}"
-      r" before and after final magnitude cleanup relative to dense MLP-32.}"
-  )
-  print(r"\label{tab:pre_post_pruning}")
-  print(r"\resizebox{\columnwidth}{!}{%")
-  print(r"\begin{tabular}{lcccc}")
-  print(r"\toprule")
-  print(
-      r"\textbf{Dataset} & \textbf{Dense MLP Links} & \textbf{Pre-Prune"
-      r" Links} & \textbf{Post-Prune Links} & \textbf{Compression} \\"
-  )
-  print(r"\midrule")
   for ds_name, ds_res in all_results.items():
     dense_l = np.mean(ds_res["MLP32"]["links"])
     pre_l = np.mean(pre_post_prune[ds_name]["pre_links"])
@@ -1693,36 +1598,13 @@ def run_full_q2_benchmark():
         f"\\textbf{{{ds_name}}} & {dense_l:.0f} & {pre_l:.1f} & {post_l:.1f} &"
         f" $\\mathbf{{{comp:.1f}\\times}}$ \\\\"
     )
-  print(r"\bottomrule")
-  print(r"\end{tabular}}")
-  print(r"\end{table}")
 
-  # ==========================================================================
-  # TABLE 4: ABLATION STUDY (OPTIMIZER & RESIDUAL FORMULATION)
-  # ==========================================================================
   print("\n" + "%" * 90)
-  print("% TABLE 4: ABLATION STUDY (CARDINALITY OPTIMIZER & RESIDUAL SIGNAL)")
+  print("% TABLE 4 ROWS (ABLATION STUDY)")
   print("%" * 90)
-  print(r"\begin{table*}[t]")
-  print(r"\centering")
-  print(
-      r"\caption{Ablation study on connection-cardinality selection and"
-      r" residual formulations across "
-      + str(N_SPLITS)
-      + r" stratified splits ($\text{Mean} \pm \text{Std}$).}"
-  )
-  print(r"\label{tab:ablation_study}")
-  print(r"\resizebox{\textwidth}{!}{%")
-  print(r"\begin{tabular}{llccccc}")
-  print(r"\toprule")
-  print(
-      r"\textbf{Dataset} & \textbf{Variant} & \textbf{Test Accuracy} &"
-      r" \textbf{Macro-F1} & \textbf{Active Links} & \textbf{W / T / L} &"
-      r" \textbf{Wilcoxon $p$-val} \\"
-  )
-  print(r"\midrule")
-
-  for ds_name in ("Two Spirals (32D)", "UCI Digits (64D)"):
+  for ds_name in all_results.keys():
+    if ds_name not in ablation_results:
+      continue
     base_acc = np.array(all_results[ds_name]["AGNN"]["acc"])
     base_f1 = np.array(all_results[ds_name]["AGNN"]["f1"])
     base_links = np.mean(all_results[ds_name]["AGNN"]["links"])
@@ -1758,16 +1640,11 @@ def run_full_q2_benchmark():
       )
     print(r"\midrule")
 
-  print(r"\bottomrule")
-  print(r"\end{tabular}}")
-  print(r"\end{table*}")
-
 
 if __name__ == "__main__":
-
-
+  # 1. Чувствительность по сетке [8, 16, 24, 32, 40, 48, 56, 64]
   run_max_axes_sensitivity()
 
-  print("\n")
-
-  run_full_q2_benchmark()
+  # 2. Быстрый перезапуск основного бенчмарка только для UCI Digits с max_axes=48
+  # (установите only_digits=False, если нужно пересчитать все 5 датасетов сразу)
+  run_full_q2_benchmark(only_digits=True)
