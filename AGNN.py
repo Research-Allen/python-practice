@@ -1,16 +1,19 @@
 import time
 import warnings
 import numpy as np
-from sklearn.datasets import load_digits
+from scipy.stats import wilcoxon
+from sklearn.datasets import load_breast_cancer, load_digits, load_iris, load_wine
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
 
+N_SPLITS = 15
+
 
 # ==============================================================================
-# 1. БАЗОВЫЕ ФУНКЦИИ АКТИВАЦИИ, ПОТЕРЬ И ОТБОРА ИНФОРМАТИВНЫХ ОСЕЙ
+# 1. БАЗОВЫЕ ПРИМИТИВЫ И ГЕНЕРАТОР ДАННЫХ
 # ==============================================================================
 def relu(x):
   return np.maximum(0.0, x)
@@ -31,12 +34,34 @@ def cross_entropy(y_oh, probs):
   return -float(np.mean(np.sum(y_oh * np.log(p), axis=1)))
 
 
+def make_two_spirals(
+    samples=1000, turns=2.0, noise=0.12, noise_dims=30, seed=42
+):
+  rng = np.random.RandomState(seed)
+  n = samples // 2
+  t = np.linspace(0.3, turns * 2 * np.pi, n)
+
+  x0 = t * np.cos(t) + rng.randn(n) * noise
+  y0 = t * np.sin(t) + rng.randn(n) * noise
+  x1 = t * np.cos(t + np.pi) + rng.randn(n) * noise
+  y1 = t * np.sin(t + np.pi) + rng.randn(n) * noise
+
+  X = np.vstack([np.column_stack([x0, y0]), np.column_stack([x1, y1])])
+  if noise_dims > 0:
+    X = np.hstack([X, rng.randn(samples, noise_dims)])
+
+  y = np.concatenate([np.zeros(n, dtype=int), np.ones(n, dtype=int)])
+  noise_idx = rng.choice(samples, int(0.03 * samples), replace=False)
+  y[noise_idx] = 1 - y[noise_idx]
+
+  perm = rng.permutation(samples)
+  return X[perm], y[perm]
+
+
+# ==============================================================================
+# 2. ОТБОР ИНФОРМАТИВНЫХ ОСЕЙ И ПРОСТРАНСТВЕННОЕ ХЕШИРОВАНИЕ
+# ==============================================================================
 def detect_informative_axes(X, y, max_axes=22):
-  """
-    Отбирает компактное подпространство признаков:
-    - для бинарных нелинейных многообразий использует парную 1-NN синергию;
-    - для многоклассовых/распределенных данных применяет многоклассовый критерий Фишера.
-    """
   n, d = X.shape
   if d <= max_axes:
     return np.arange(d)
@@ -88,9 +113,6 @@ def detect_informative_axes(X, y, max_axes=22):
   return np.array(combined)
 
 
-# ==============================================================================
-# 2. ПРОСТРАНСТВЕННЫЙ ХЕШЕР И ДИСКРЕТНЫЙ ПОИСК МЕТОДОМ ЗОЛОТОГО СЕЧЕНИЯ
-# ==============================================================================
 class BaseSpatialHasher:
 
   def __init__(self, base_dim, n_planes=10, seed=42):
@@ -106,7 +128,6 @@ class BaseSpatialHasher:
 
 
 def golden_section_discrete_search(eval_fn, low, high):
-  """Дискретный поиск минимума на [low, high] методом золотого сечения (phi = 1.618)."""
   low, high = int(low), int(high)
   if high <= low:
     return low
@@ -114,8 +135,7 @@ def golden_section_discrete_search(eval_fn, low, high):
   a, b = low, high
   x1 = int(round(b - inv_phi * (b - a)))
   x2 = int(round(a + inv_phi * (b - a)))
-  f1 = eval_fn(x1)
-  f2 = eval_fn(x2)
+  f1, f2 = eval_fn(x1), eval_fn(x2)
 
   while (b - a) > 1:
     if f1 < f2:
@@ -131,16 +151,9 @@ def golden_section_discrete_search(eval_fn, low, high):
 
 
 # ==============================================================================
-# 3. ОСНОВНОЙ КЛАСС МЕТОДА: OptimalCrossTowerAGNN
+# 3. ПРЕДЛАГАЕМАЯ АРХИТЕКТУРА: OptimalCrossTowerAGNN (PATCHED v2.0)
 # ==============================================================================
 class OptimalCrossTowerAGNN:
-  """
-    Adaptive Growing Neural Network с саморегулирующейся структурной сложностью:
-    - региональная приоритизация остаточной энергии (Regional Residual Energy);
-    - иерархические башни (3D -> 4D -> 5D) с локальными куполами и ReLU-проекциями;
-    - отбор оптимальной мощности связей методом золотого сечения (phi = 1.618);
-    - синтез ациклических межбашенных мостов по градиентному критерию |<a_src, dz_dst>|.
-    """
 
   def __init__(
       self,
@@ -149,6 +162,7 @@ class OptimalCrossTowerAGNN:
       max_units=45,
       learning_rate=0.04,
       sparsity_penalty=0.025,
+      max_bridges_per_unit=4,
       seed=42,
   ):
     self.output_dim = output_dim
@@ -157,6 +171,7 @@ class OptimalCrossTowerAGNN:
     self.base_lr = learning_rate
     self.lr = learning_rate
     self.sparsity_penalty = sparsity_penalty
+    self.max_bridges_per_unit = max_bridges_per_unit
     self.seed = seed
 
   def _init_graph(self, base_dim):
@@ -248,7 +263,8 @@ class OptimalCrossTowerAGNN:
             u["bridge_weights"] -= self.lr * (dW_br * u["bridge_mask"])
           d_dome = d_act * (1.0 + 0.4 * lateral)
         else:
-          unit_dz[idx] = d_act * dome_act * 0.4
+          # [PATCH 2] Точный неискажённый градиент для одиночного Local Dome
+          unit_dz[idx] = d_act
           d_dome = d_act
 
         if not return_unit_grads and idx >= frozen_before_idx:
@@ -286,9 +302,6 @@ class OptimalCrossTowerAGNN:
       self.forward_sub(X_sub[batch])
       self.backward(y_oh[batch], frozen_before_idx=frozen_before_idx)
 
-  # --------------------------------------------------------------------------
-  # 1. РЕГИОНАЛЬНАЯ ПРИОРИТИЗАЦИЯ ОСТАТОЧНОЙ ЭНЕРГИИ
-  # --------------------------------------------------------------------------
   def build_global_candidates(
       self, X_sub, y_idx, tabu_actions, cluster_size=18, min_seed_dist=0.42
   ):
@@ -312,7 +325,12 @@ class OptimalCrossTowerAGNN:
       err_count = np.sum(local_gaps > 0.35)
 
       if err_count >= 3:
-        base_score = float(np.mean(local_gaps)) * np.sqrt(err_count)
+        # [PATCH 5] Устойчивая оценка региона с учётом разброса невязки
+        base_score = (
+            float(np.mean(local_gaps))
+            * np.log1p(err_count)
+            * (1.0 + float(np.std(local_gaps)))
+        )
         center_full = np.mean(X_sub[local_idx], axis=0)
         global_pool.append({
             "base_score": base_score,
@@ -326,7 +344,9 @@ class OptimalCrossTowerAGNN:
             "action_key": action_key,
         })
 
-    work_mask = gaps > 0.38
+    # [PATCH 3] Адаптивный перцентильный порог для выделения очагов ошибок
+    thr = np.percentile(gaps, 85)
+    work_mask = gaps >= thr
     if np.any(work_mask):
       dome_dim = min(self.base_dim, 5)
       for h in np.unique(hashes[work_mask]):
@@ -363,7 +383,12 @@ class OptimalCrossTowerAGNN:
         err_count = np.sum(local_gaps > 0.35)
 
         if err_count >= 3:
-          base_score = float(np.mean(local_gaps)) * np.sqrt(err_count)
+          # [PATCH 5] Устойчивая оценка региона
+          base_score = (
+              float(np.mean(local_gaps))
+              * np.log1p(err_count)
+              * (1.0 + float(np.std(local_gaps)))
+          )
           center_full = np.mean(X_sub[local_idx], axis=0)
           global_pool.append({
               "base_score": base_score,
@@ -396,10 +421,12 @@ class OptimalCrossTowerAGNN:
       sigma_zone = 1.0
 
     for i, cand in enumerate(global_pool):
+      # [PATCH 4] Локализованный расчёт Regional Error Mass по 250 ближайшим соседям
       pt_dists = np.linalg.norm(X_sub - cand["center_full"], axis=1)
-      kernel_pts = np.exp(-0.5 * (pt_dists / sigma_zone) ** 2)
+      nn_idx = np.argsort(pt_dists)[:250]
+      kernel_pts = np.exp(-0.5 * (pt_dists[nn_idx] / sigma_zone) ** 2)
       regional_error_mass = float(
-          np.sum(gaps * kernel_pts) / (np.sum(kernel_pts) + 1e-8)
+          np.sum(gaps[nn_idx] * kernel_pts) / (np.sum(kernel_pts) + 1e-8)
       )
 
       if len(centers) > 1:
@@ -418,9 +445,6 @@ class OptimalCrossTowerAGNN:
     global_pool.sort(key=lambda c: c["score"], reverse=True)
     return global_pool
 
-  # --------------------------------------------------------------------------
-  # 2. ВЫБОР ВХОДЯЩИХ СВЯЗЕЙ МЕТОДОМ ЗОЛОТОГО СЕЧЕНИЯ (PHI = 1.618)
-  # --------------------------------------------------------------------------
   def select_connections_golden(
       self, candidate_cols, local_idx, local_gaps, y_idx
   ):
@@ -466,7 +490,13 @@ class OptimalCrossTowerAGNN:
         loss_k = float(np.mean((p_norm - target_bin) ** 2))
       return loss_k + self.sparsity_penalty * (k / M)
 
-    k_opt = golden_section_discrete_search(eval_cost, low=2, high=M)
+    # [PATCH 7] Гибридный поиск: точный перебор при M <= 20, Golden Section при M > 20
+    if M <= 20:
+      losses = [eval_cost(k) for k in range(2, M + 1)]
+      k_opt = int(np.argmin(losses) + 2)
+    else:
+      k_opt = golden_section_discrete_search(eval_cost, low=2, high=M)
+
     return ordered_cols[:k_opt]
 
   def apply_growth(
@@ -519,6 +549,8 @@ class OptimalCrossTowerAGNN:
           "unit_indices": [len(self.units)],
           "level": level,
       }
+      # [PATCH 12] Гарантированная регистрация узла в графе до выхода из ветки NEW_SEED
+      self.units.append(unit)
     else:
       sid = seed_id
       seed = self.seeds[sid]
@@ -540,11 +572,13 @@ class OptimalCrossTowerAGNN:
       center_in = np.mean(sub_in, axis=0)
       spread_in = np.std(sub_in, axis=0)
 
+      # [PATCH 6] Нормированная инициализация новых deep-axis нейронов
       in_dim = len(input_indices)
-      new_w = (center_in + 0.08 * spread_in * self.rng.randn(in_dim)).reshape(
-          in_dim, 1
-      )
-      new_b = (-0.5 * np.dot(center_in, new_w)).reshape(1, 1)
+      new_w = (
+          center_in + 0.08 * spread_in * self.rng.randn(in_dim)
+      ).reshape(in_dim, 1)
+      new_w /= np.linalg.norm(new_w) + 1e-8
+      new_b = np.array([[-float(center_in @ new_w)]])
 
       seed["level"] = new_level
       seed["unit_indices"].append(len(self.units))
@@ -560,8 +594,8 @@ class OptimalCrossTowerAGNN:
           "mask": np.ones((in_dim, 1)),
           "bias": new_b,
       }
+      self.units.append(unit)
 
-    self.units.append(unit)
     new_out_w = self.rng.randn(1, self.output_dim) * 0.25
     dom_class = int(np.bincount(y_idx[local_idx]).argmax())
     new_out_w[0, dom_class] += 0.55
@@ -569,9 +603,6 @@ class OptimalCrossTowerAGNN:
     self.W_out = np.vstack([self.W_out, new_out_w])
     self.out_mask = np.vstack([self.out_mask, np.ones((1, self.output_dim))])
 
-  # --------------------------------------------------------------------------
-  # 3. ГРАДИЕНТНЫЙ СИНТЕЗ АЦИКЛИЧЕСКИХ МЕЖБАШЕННЫХ МОСТОВ + ЗОЛОТОЕ СЕЧЕНИЕ
-  # --------------------------------------------------------------------------
   def optimize_inter_tower_bridges(
       self, X_tr_sub, y_tr_oh, X_val_sub, y_val, y_val_oh
   ):
@@ -583,6 +614,23 @@ class OptimalCrossTowerAGNN:
 
     bridge_candidates = []
     for dst_idx, u_dst in enumerate(self.units):
+      # [PATCH 9] Ограничение максимального числа межбашенных мостов на один узел
+      if u_dst["type"] == "local_dome":
+        if len(u_dst["bridge_indices"]) >= self.max_bridges_per_unit:
+          continue
+      else:
+        own_sid = u_dst["seed_id"]
+        own_cols = {
+            self.base_dim + idx for idx in self.seeds[own_sid]["unit_indices"]
+        }
+        ext_count = sum(
+            1
+            for col in u_dst["input_indices"]
+            if col >= self.base_dim and col not in own_cols
+        )
+        if ext_count >= self.max_bridges_per_unit:
+          continue
+
       dz_dst = unit_dz[dst_idx]
       existing_inputs = set(
           u_dst["bridge_indices"]
@@ -599,7 +647,11 @@ class OptimalCrossTowerAGNN:
           continue
 
         a_src = self.coords[:, src_col : src_col + 1]
-        grad_score = abs(float(np.mean(a_src * dz_dst)))
+        # [PATCH 8] Безразмерная нормировка межбашенной корреляции
+        num = np.mean(a_src * dz_dst)
+        den = np.std(a_src) * np.std(dz_dst) + 1e-8
+        grad_score = abs(float(num / den))
+
         level_bonus = 1.25 if u_src["level"] == u_dst["level"] else 1.0
         bridge_candidates.append(
             (grad_score * level_bonus, grad_score, src_col, dst_idx)
@@ -626,6 +678,23 @@ class OptimalCrossTowerAGNN:
         dz_now = self.backward(y_tr_oh, return_unit_grads=True)
         for _, _, src_col, dst_idx in top_bridges[:k]:
           u_dst = self.units[dst_idx]
+          if u_dst["type"] == "local_dome":
+            if len(u_dst["bridge_indices"]) >= self.max_bridges_per_unit:
+              continue
+          else:
+            own_sid = u_dst["seed_id"]
+            own_cols = {
+                self.base_dim + idx
+                for idx in self.seeds[own_sid]["unit_indices"]
+            }
+            ext_count = sum(
+                1
+                for col in u_dst["input_indices"]
+                if col >= self.base_dim and col not in own_cols
+            )
+            if ext_count >= self.max_bridges_per_unit:
+              continue
+
           a_src = self.coords[:, src_col : src_col + 1]
           raw_grad = float(np.mean(a_src * dz_now[dst_idx]))
           init_w = float(
@@ -678,9 +747,6 @@ class OptimalCrossTowerAGNN:
     self.restore_state(base_state)
     return 0
 
-  # --------------------------------------------------------------------------
-  # 4. ЗАЧИСТКА СЛАБЫХ СВЯЗЕЙ И ФИНАЛЬНАЯ ЗАМОРОЗКА В СТАТИЧЕСКИЙ DAG
-  # --------------------------------------------------------------------------
   def prune_weak_connections(self, X_sub, rel_threshold=0.16):
     self.forward_sub(X_sub)
     for u in self.units:
@@ -712,23 +778,37 @@ class OptimalCrossTowerAGNN:
       u["mask"] = new_mask
       u["weights"] *= new_mask
 
-  def prune_redundant_outputs(self, X_tr_sub, X_val_sub, y_val):
+  def prune_redundant_outputs(
+      self, X_tr_sub, X_val_sub, y_val, y_val_oh, loss_tol=0.002
+  ):
+    # [PATCH 10] Комбинированный критерий (0.5 * Acc + 0.5 * Macro-F1) + защита cross-entropy
     self.forward_sub(X_tr_sub)
-    base_acc = np.mean(
-        np.argmax(self.forward_sub(X_val_sub), axis=1) == y_val
-    )
     std_coords = np.std(self.coords, axis=0, keepdims=True).T
     importance = np.abs(self.W_out * self.out_mask) * std_coords
+
+    probs_val = self.forward_sub(X_val_sub)
+    base_preds = np.argmax(probs_val, axis=1)
+    base_acc = accuracy_score(y_val, base_preds)
+    base_f1 = f1_score(y_val, base_preds, average="macro")
+    base_score = 0.5 * base_acc + 0.5 * base_f1
+    base_loss = cross_entropy(y_val_oh, probs_val)
 
     for flat_idx in np.argsort(importance.ravel()):
       r, c = divmod(flat_idx, self.output_dim)
       if self.out_mask[r, c] == 0:
         continue
+      if r >= self.base_dim and np.sum(self.out_mask[r, :]) <= 1:
+        continue
+
       self.out_mask[r, c] = 0.0
-      if (
-          np.mean(np.argmax(self.forward_sub(X_val_sub), axis=1) == y_val)
-          >= base_acc
-      ):
+      probs_new = self.forward_sub(X_val_sub)
+      preds = np.argmax(probs_new, axis=1)
+      new_acc = accuracy_score(y_val, preds)
+      new_f1 = f1_score(y_val, preds, average="macro")
+      new_score = 0.5 * new_acc + 0.5 * new_f1
+      new_loss = cross_entropy(y_val_oh, probs_new)
+
+      if new_score >= base_score and new_loss <= base_loss + loss_tol:
         self.W_out[r, c] = 0.0
       else:
         self.out_mask[r, c] = 1.0
@@ -838,7 +918,7 @@ class OptimalCrossTowerAGNN:
     stall = 0
 
     while len(self.units) < self.max_units:
-      if best_acc >= 0.985 or stall >= patience:
+      if best_acc >= 0.990 or stall >= patience:
         break
 
       global_pool = self.build_global_candidates(X_tr_sub, y_tr, tabu_actions)
@@ -889,18 +969,19 @@ class OptimalCrossTowerAGNN:
     self.optimize_inter_tower_bridges(
         X_tr_sub, y_tr_oh, X_val_sub, y_val, y_val_oh
     )
+
+    self.pre_prune_stats = self.get_topology_stats()
     self.prune_weak_connections(X_tr_sub, rel_threshold=0.16)
-    self.prune_redundant_outputs(X_tr_sub, X_val_sub, y_val)
+    self.prune_redundant_outputs(
+        X_tr_sub, X_val_sub, y_val, y_val_oh, loss_tol=0.002
+    )
     return self
 
-  def predict_proba(self, X):
-    return self.forward_sub(X[:, self.active_axes])
-
   def predict(self, X):
-    return np.argmax(self.predict_proba(X), axis=1)
+    probs = self.forward_sub(X[:, self.active_axes])
+    return np.argmax(probs, axis=1)
 
   def get_topology_stats(self):
-    """Возвращает число активных связей, межбашенных мостов, MACs и размер в байтах."""
     internal = 0
     bridges = 0
     for u in self.units:
@@ -924,45 +1005,222 @@ class OptimalCrossTowerAGNN:
 
     total_links = internal + int(np.sum(self.out_mask))
     total_biases = len(self.units) + self.output_dim
+    # [PATCH 11] Корректный расчёт памяти параметров (float64 = 8 байт на параметр)
+    param_count = total_links + total_biases
     return {
         "active_links": total_links,
         "cross_tower_bridges": bridges,
         "towers": len(self.seeds),
         "units": len(self.units),
         "macs_per_sample": total_links,
-        "model_bytes": total_links * 6 + total_biases * 4,
+        "model_bytes": param_count * 8,
     }
 
 
 # ==============================================================================
-# 4. ПРИМЕР ЗАПУСКА И ВЫВОД МЕТРИК
+# 4. ЭТАЛОННЫЕ МОДЕЛИ (BASELINES) С УНИФИЦИРОВАННЫМ ПОДСЧЁТОМ БАЙТОВ (8 БАЙТ)
 # ==============================================================================
-def make_two_spirals(
-    samples=1000, turns=2.0, noise=0.12, noise_dims=30, seed=42
-):
-  rng = np.random.RandomState(seed)
-  n = samples // 2
-  t = np.linspace(0.3, turns * 2 * np.pi, n)
-  x0, y0 = t * np.cos(t) + rng.randn(n) * noise, t * np.sin(t) + rng.randn(
-      n
-  ) * noise
-  x1, y1 = t * np.cos(t + np.pi) + rng.randn(n) * noise, t * np.sin(
-      t + np.pi
-  ) + rng.randn(n) * noise
-  X = np.vstack([np.column_stack([x0, y0]), np.column_stack([x1, y1])])
-  if noise_dims > 0:
-    X = np.hstack([X, rng.randn(samples, noise_dims)])
-  y = np.concatenate([np.zeros(n, dtype=int), np.ones(n, dtype=int)])
-  noise_idx = rng.choice(samples, int(0.03 * samples), replace=False)
-  y[noise_idx] = 1 - y[noise_idx]
-  perm = rng.permutation(samples)
-  return X[perm], y[perm]
+class CascadeCorrelationBaseline:
+
+  def __init__(
+      self, input_dim, output_dim, max_hidden=18, lr=0.04, pool_size=6, seed=42
+  ):
+    self.input_dim = input_dim
+    self.output_dim = output_dim
+    self.max_hidden = max_hidden
+    self.lr = lr
+    self.pool_size = pool_size
+    self.rng = np.random.RandomState(seed)
+
+  def _train_output(self, H, y_oh, epochs=110):
+    m, dim = H.shape
+    if not hasattr(self, "W_out") or self.W_out.shape[0] != dim:
+      W_new = self.rng.randn(dim, self.output_dim) * 0.05
+      if hasattr(self, "W_out"):
+        W_new[: self.W_out.shape[0], :] = self.W_out
+      self.W_out = W_new
+      if not hasattr(self, "b_out"):
+        self.b_out = np.zeros((1, self.output_dim))
+
+    for _ in range(epochs):
+      probs = softmax(H @ self.W_out + self.b_out)
+      dz = (probs - y_oh) / m
+      self.W_out -= self.lr * (H.T @ dz + 1e-4 * self.W_out)
+      self.b_out -= self.lr * np.mean(dz, axis=0, keepdims=True)
+
+  def fit(self, X, y):
+    y_oh = np.eye(self.output_dim)[y]
+    self.hidden_weights = []
+    self.hidden_biases = []
+    H = X.copy()
+    self._train_output(H, y_oh, epochs=140)
+
+    for _ in range(self.max_hidden):
+      probs = softmax(H @ self.W_out + self.b_out)
+      err = y_oh - probs
+      err_centered = err - np.mean(err, axis=0, keepdims=True)
+      if np.mean(np.abs(err)) < 0.045:
+        break
+
+      best_corr = -1.0
+      best_w, best_b = None, None
+      dim = H.shape[1]
+
+      for _ in range(self.pool_size):
+        w = self.rng.randn(dim, 1) * np.sqrt(2.0 / dim)
+        b = np.zeros((1, 1))
+        for _ in range(55):
+          v = np.tanh(H @ w + b)
+          v_cent = v - np.mean(v)
+          cov = np.sum(v_cent * err_centered, axis=0, keepdims=True)
+          signs = np.sign(cov)
+          dv = np.sum(err_centered * signs, axis=1, keepdims=True)
+          dz = dv * (1.0 - v**2)
+          w += (self.lr * 0.5 / len(H)) * (H.T @ dz)
+          b += (self.lr * 0.5 / len(H)) * np.sum(dz)
+
+        v = np.tanh(H @ w + b)
+        v_cent = v - np.mean(v)
+        score = float(np.sum(np.abs(np.sum(v_cent * err_centered, axis=0))))
+        if score > best_corr:
+          best_corr = score
+          best_w, best_b = w, b
+
+      self.hidden_weights.append(best_w)
+      self.hidden_biases.append(best_b)
+      v_new = np.tanh(H @ best_w + best_b)
+      H = np.hstack([H, v_new])
+      self._train_output(H, y_oh, epochs=90)
+    return self
+
+  def predict(self, X):
+    H = X.copy()
+    for w, b in zip(self.hidden_weights, self.hidden_biases):
+      H = np.hstack([H, np.tanh(H @ w + b)])
+    return np.argmax(softmax(H @ self.W_out + self.b_out), axis=1)
+
+  def get_topology_stats(self):
+    active = sum(w.size for w in self.hidden_weights) + self.W_out.size
+    biases = len(self.hidden_biases) + self.output_dim
+    param_count = active + biases
+    return {
+        "active_links": active,
+        "cross_tower_bridges": 0,
+        "macs_per_sample": active,
+        "model_bytes": param_count * 8,
+    }
 
 
-if __name__ == "__main__":
+class BaselineMLP32:
+
+  def __init__(self, input_dim, output_dim, hidden_dim=32, lr=0.04, seed=42):
+    self.input_dim = input_dim
+    self.output_dim = output_dim
+    self.hidden_dim = hidden_dim
+    self.lr = lr
+    self.rng = np.random.RandomState(seed)
+
+    self.W1 = self.rng.randn(input_dim, hidden_dim) * np.sqrt(2.0 / input_dim)
+    self.b1 = np.zeros((1, hidden_dim))
+    self.m1 = np.ones_like(self.W1)
+
+    self.W2 = self.rng.randn(hidden_dim, output_dim) * np.sqrt(2.0 / hidden_dim)
+    self.b2 = np.zeros((1, output_dim))
+    self.m2 = np.ones_like(self.W2)
+
+  def _forward(self, X):
+    self.z1 = X @ (self.W1 * self.m1) + self.b1
+    self.h1 = relu(self.z1)
+    self.z2 = self.h1 @ (self.W2 * self.m2) + self.b2
+    self.probs = softmax(self.z2)
+    return self.probs
+
+  def fit(self, X, y, epochs=240, batch_size=32, l2_reg=1e-4):
+    y_oh = np.eye(self.output_dim)[y]
+    n = len(X)
+    for _ in range(epochs):
+      idx = self.rng.permutation(n)
+      for s in range(0, n, batch_size):
+        b = idx[s : s + batch_size]
+        Xb, yb = X[b], y_oh[b]
+        m = len(Xb)
+        probs = self._forward(Xb)
+        dz2 = (probs - yb) / m
+        dW2 = self.h1.T @ dz2 + l2_reg * (self.W2 * self.m2)
+        db2 = np.mean(dz2, axis=0, keepdims=True)
+        dh1 = dz2 @ (self.W2 * self.m2).T
+        dz1 = dh1 * relu_grad(self.z1)
+        dW1 = Xb.T @ dz1 + l2_reg * (self.W1 * self.m1)
+        db1 = np.mean(dz1, axis=0, keepdims=True)
+
+        self.W2 -= self.lr * (dW2 * self.m2)
+        self.b2 -= self.lr * db2
+        self.W1 -= self.lr * (dW1 * self.m1)
+        self.b1 -= self.lr * db1
+    return self
+
+  def prune_to_target_links(self, X, y, target_links, finetune_epochs=60):
+    all_w = np.concatenate([np.abs(self.W1).ravel(), np.abs(self.W2).ravel()])
+    k = int(np.clip(target_links, 2, len(all_w)))
+    thresh = np.partition(all_w, -k)[-k]
+    self.m1 = (np.abs(self.W1) >= thresh).astype(float)
+    self.m2 = (np.abs(self.W2) >= thresh).astype(float)
+    total_now = int(np.sum(self.m1) + np.sum(self.m2))
+    if total_now > k:
+      ones_1 = np.argwhere(self.m1 > 0)
+      for r, c in ones_1[: total_now - k]:
+        self.m1[r, c] = 0.0
+    self.W1 *= self.m1
+    self.W2 *= self.m2
+    self.fit(X, y, epochs=finetune_epochs)
+
+  def predict(self, X):
+    return np.argmax(self._forward(X), axis=1)
+
+  def get_topology_stats(self):
+    active = int(np.sum(self.m1) + np.sum(self.m2))
+    biases = self.hidden_dim + self.output_dim
+    param_count = active + biases
+    return {
+        "active_links": active,
+        "cross_tower_bridges": 0,
+        "macs_per_sample": active,
+        "model_bytes": param_count * 8,
+    }
+
+
+# ==============================================================================
+# 5. ГЕНЕРАЦИЯ ГОТОВЫХ ТАБЛИЦ ДЛЯ LATEX (BOOKTABS)
+# ==============================================================================
+def format_stat_sig(agnn_arr, base_arr):
+  diff = agnn_arr - base_arr
+  wins = int(np.sum(diff > 1e-12))
+  ties = int(np.sum(np.abs(diff) <= 1e-12))
+  losses = int(np.sum(diff < -1e-12))
+  if np.allclose(diff, 0):
+    p_w = 1.0
+  else:
+    _, p_w = wilcoxon(diff)
+  sig_mark = (
+      "$^{***}$"
+      if p_w < 0.001
+      else ("$^{**}$" if p_w < 0.01 else ("$^{*}$" if p_w < 0.05 else ""))
+  )
+  return f"{wins}/{ties}/{losses}", f"{p_w:.4f}{sig_mark}"
+
+
+def run_full_q2_benchmark():
   datasets = {
-      "Two Spirals + 30 Noise (32D)": (*make_two_spirals(seed=42), 20, 0.04),
-      "UCI Digits (64D, 10 классов)": (
+      "Two Spirals (32D)": (*make_two_spirals(seed=42), 20, 0.04),
+      "Iris (4D)": (load_iris().data, load_iris().target, 4, 0.04),
+      "Breast Cancer (30D)": (
+          load_breast_cancer().data,
+          load_breast_cancer().target,
+          18,
+          0.04,
+      ),
+      "Wine (13D)": (load_wine().data, load_wine().target, 13, 0.04),
+      "UCI Digits (64D)": (
           load_digits().data,
           load_digits().target,
           24,
@@ -970,45 +1228,302 @@ if __name__ == "__main__":
       ),
   }
 
-  for name, (X, y, max_ax, lr) in datasets.items():
-    sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    tr, te = next(sss.split(X, y))
-    sc = StandardScaler()
-    X_tr, X_te = sc.fit_transform(X[tr]), sc.transform(X[te])
-    y_tr, y_te = y[tr], y[te]
+  models_order = ["AGNN", "CasCor", "MLP32", "MagPrune"]
+  models_latex = {
+      "AGNN": r"\textbf{OptimalCrossTowerAGNN (Ours)}",
+      "CasCor": r"Cascade-Correlation \cite{fahlman1990}",
+      "MLP32": r"Baseline MLP-32",
+      "MagPrune": r"MagnitudePruningMLP (Iso-Links)",
+  }
 
-    t0 = time.perf_counter()
-    model = OptimalCrossTowerAGNN(
-        output_dim=len(np.unique(y)),
-        max_axes=max_ax,
-        max_units=45,
-        learning_rate=lr,
-        seed=42,
-    )
-    model.fit(X_tr, y_tr)
-    train_sec = time.perf_counter() - t0
+  all_results = {}
+  pre_post_prune = {}
 
-    t_inf0 = time.perf_counter()
-    preds = model.predict(X_te)
-    inf_ms = (time.perf_counter() - t_inf0) * 1000.0
-    stats = model.get_topology_stats()
+  for ds_name, (X, y, max_ax, lr) in datasets.items():
+    out_dim = len(np.unique(y))
+    sss = StratifiedShuffleSplit(
+        n_splits=N_SPLITS, test_size=0.2, random_state=42
+    )
 
-    print(f"\n=== {name} ===")
+    ds_res = {
+        m: {
+            "acc": [],
+            "f1": [],
+            "links": [],
+            "bridges": [],
+            "macs": [],
+            "bytes": [],
+            "train_s": [],
+            "inf_ms": [],
+        }
+        for m in models_order
+    }
+    pre_post_prune[ds_name] = {
+        "pre_links": [],
+        "post_links": [],
+        "pre_macs": [],
+        "post_macs": [],
+        "test_acc": [],
+    }
+
+    for seed, (tr, te) in enumerate(sss.split(X, y)):
+      sc = StandardScaler()
+      X_tr, X_te = sc.fit_transform(X[tr]), sc.transform(X[te])
+      y_tr, y_te = y[tr], y[te]
+
+      # 1. OptimalCrossTowerAGNN v2.0
+      t0 = time.perf_counter()
+      agnn = OptimalCrossTowerAGNN(
+          output_dim=out_dim,
+          max_axes=max_ax,
+          max_units=45,
+          learning_rate=lr,
+          max_bridges_per_unit=4,
+          seed=seed,
+      )
+      agnn.fit(X_tr, y_tr)
+      t_train = time.perf_counter() - t0
+
+      t_i0 = time.perf_counter()
+      p_agnn = agnn.predict(X_te)
+      t_inf = (time.perf_counter() - t_i0) * 1000.0
+      st_agnn = agnn.get_topology_stats()
+
+      ds_res["AGNN"]["acc"].append(accuracy_score(y_te, p_agnn))
+      ds_res["AGNN"]["f1"].append(f1_score(y_te, p_agnn, average="macro"))
+      ds_res["AGNN"]["links"].append(st_agnn["active_links"])
+      ds_res["AGNN"]["bridges"].append(st_agnn["cross_tower_bridges"])
+      ds_res["AGNN"]["macs"].append(st_agnn["macs_per_sample"])
+      ds_res["AGNN"]["bytes"].append(st_agnn["model_bytes"])
+      ds_res["AGNN"]["train_s"].append(t_train)
+      ds_res["AGNN"]["inf_ms"].append(t_inf)
+
+      pre_post_prune[ds_name]["pre_links"].append(
+          agnn.pre_prune_stats["active_links"]
+      )
+      pre_post_prune[ds_name]["post_links"].append(st_agnn["active_links"])
+      pre_post_prune[ds_name]["pre_macs"].append(
+          agnn.pre_prune_stats["macs_per_sample"]
+      )
+      pre_post_prune[ds_name]["post_macs"].append(st_agnn["macs_per_sample"])
+      pre_post_prune[ds_name]["test_acc"].append(accuracy_score(y_te, p_agnn))
+
+      # 2. Cascade-Correlation
+      t0 = time.perf_counter()
+      cascor = CascadeCorrelationBaseline(
+          input_dim=X_tr.shape[1],
+          output_dim=out_dim,
+          max_hidden=18,
+          lr=lr,
+          seed=seed,
+      )
+      cascor.fit(X_tr, y_tr)
+      t_train = time.perf_counter() - t0
+
+      t_i0 = time.perf_counter()
+      p_cc = cascor.predict(X_te)
+      t_inf = (time.perf_counter() - t_i0) * 1000.0
+      st_cc = cascor.get_topology_stats()
+
+      ds_res["CasCor"]["acc"].append(accuracy_score(y_te, p_cc))
+      ds_res["CasCor"]["f1"].append(f1_score(y_te, p_cc, average="macro"))
+      ds_res["CasCor"]["links"].append(st_cc["active_links"])
+      ds_res["CasCor"]["bridges"].append(0)
+      ds_res["CasCor"]["macs"].append(st_cc["macs_per_sample"])
+      ds_res["CasCor"]["bytes"].append(st_cc["model_bytes"])
+      ds_res["CasCor"]["train_s"].append(t_train)
+      ds_res["CasCor"]["inf_ms"].append(t_inf)
+
+      # 3. Baseline MLP-32
+      t0 = time.perf_counter()
+      mlp = BaselineMLP32(
+          input_dim=X_tr.shape[1],
+          output_dim=out_dim,
+          hidden_dim=32,
+          lr=lr,
+          seed=seed,
+      )
+      mlp.fit(X_tr, y_tr)
+      t_train = time.perf_counter() - t0
+
+      t_i0 = time.perf_counter()
+      p_mlp = mlp.predict(X_te)
+      t_inf = (time.perf_counter() - t_i0) * 1000.0
+      st_mlp = mlp.get_topology_stats()
+
+      ds_res["MLP32"]["acc"].append(accuracy_score(y_te, p_mlp))
+      ds_res["MLP32"]["f1"].append(f1_score(y_te, p_mlp, average="macro"))
+      ds_res["MLP32"]["links"].append(st_mlp["active_links"])
+      ds_res["MLP32"]["bridges"].append(0)
+      ds_res["MLP32"]["macs"].append(st_mlp["macs_per_sample"])
+      ds_res["MLP32"]["bytes"].append(st_mlp["model_bytes"])
+      ds_res["MLP32"]["train_s"].append(t_train)
+      ds_res["MLP32"]["inf_ms"].append(t_inf)
+
+      # 4. MagnitudePruningMLP
+      t0 = time.perf_counter()
+      mlp_pr = BaselineMLP32(
+          input_dim=X_tr.shape[1],
+          output_dim=out_dim,
+          hidden_dim=32,
+          lr=lr,
+          seed=seed,
+      )
+      mlp_pr.fit(X_tr, y_tr)
+      mlp_pr.prune_to_target_links(
+          X_tr, y_tr, target_links=st_agnn["active_links"]
+      )
+      t_train = time.perf_counter() - t0
+
+      t_i0 = time.perf_counter()
+      p_pr = mlp_pr.predict(X_te)
+      t_inf = (time.perf_counter() - t_i0) * 1000.0
+      st_pr = mlp_pr.get_topology_stats()
+
+      ds_res["MagPrune"]["acc"].append(accuracy_score(y_te, p_pr))
+      ds_res["MagPrune"]["f1"].append(f1_score(y_te, p_pr, average="macro"))
+      ds_res["MagPrune"]["links"].append(st_pr["active_links"])
+      ds_res["MagPrune"]["bridges"].append(0)
+      ds_res["MagPrune"]["macs"].append(st_pr["macs_per_sample"])
+      ds_res["MagPrune"]["bytes"].append(st_pr["model_bytes"])
+      ds_res["MagPrune"]["train_s"].append(t_train)
+      ds_res["MagPrune"]["inf_ms"].append(t_inf)
+
+    all_results[ds_name] = ds_res
+    print(f"[OK] Завершен датасет: {ds_name} ({N_SPLITS} разбиений)", flush=True)
+
+  # ==========================================================================
+  # ВЫВОД ТАБЛИЦЫ 1: PREDICTIVE PERFORMANCE & STATISTICAL SIGNIFICANCE (LATEX)
+  # ==========================================================================
+  print("\n" + "%" * 90)
+  print(
+      "% TABLE 1: PREDICTIVE PERFORMANCE & WILCOXON SIGNIFICANCE (COPY TO LATEX)"
+  )
+  print("%" * 90)
+  print(r"\begin{table*}[t]")
+  print(r"\centering")
+  print(
+      r"\caption{Classification accuracy, Macro-F1, and paired Wilcoxon"
+      r" signed-rank significance across "
+      + str(N_SPLITS)
+      + r" stratified splits ($\text{Mean} \pm \text{Std}$).}"
+  )
+  print(r"\label{tab:benchmark_accuracy}")
+  print(r"\resizebox{\textwidth}{!}{%")
+  print(r"\begin{tabular}{llcccc}")
+  print(r"\toprule")
+  print(
+      r"\textbf{Dataset} & \textbf{Method} & \textbf{Test Accuracy} &"
+      r" \textbf{Macro-F1} & \textbf{W / T / L} & \textbf{Wilcoxon $p$-val}"
+      r" \\"
+  )
+  print(r"\midrule")
+
+  for ds_name, ds_res in all_results.items():
+    agnn_acc = np.array(ds_res["AGNN"]["acc"])
+    for idx_m, m in enumerate(models_order):
+      ds_col = f"\\multirow{{4}}{{*}}{{\\textbf{{{ds_name}}}}}" if idx_m == 0 else ""
+      acc_str = (
+          f"${np.mean(ds_res[m]['acc']):.4f} \\pm {np.std(ds_res[m]['acc']):.4f}$"
+      )
+      f1_str = (
+          f"${np.mean(ds_res[m]['f1']):.4f} \\pm {np.std(ds_res[m]['f1']):.4f}$"
+      )
+      if m == "AGNN":
+        acc_str = r"\textbf{" + acc_str + "}"
+        wtl_str, p_str = "---", "---"
+      else:
+        wtl_str, p_str = format_stat_sig(agnn_acc, np.array(ds_res[m]["acc"]))
+      print(
+          f"{ds_col} & {models_latex[m]} & {acc_str} & {f1_str} & {wtl_str} &"
+          f" {p_str} \\\\"
+      )
+    print(r"\midrule")
+  print(r"\bottomrule")
+  print(r"\end{tabular}}")
+  print(r"\end{table*}")
+
+  # ==========================================================================
+  # ВЫВОД ТАБЛИЦЫ 2: HARDWARE & STRUCTURAL EFFICIENCY (LATEX)
+  # ==========================================================================
+  print("\n" + "%" * 90)
+  print(
+      "% TABLE 2: STRUCTURAL SPARSITY, MACs, MODEL SIZE & LATENCY (COPY TO LATEX)"
+  )
+  print("%" * 90)
+  print(r"\begin{table*}[t]")
+  print(r"\centering")
+  print(
+      r"\caption{Structural complexity, active connections, MAC operations,"
+      r" parameter footprint (Bytes, float64), and inference latency across "
+      + str(N_SPLITS)
+      + r" splits.}"
+  )
+  print(r"\label{tab:hardware_efficiency}")
+  print(r"\resizebox{\textwidth}{!}{%")
+  print(r"\begin{tabular}{llcccccc}")
+  print(r"\toprule")
+  print(
+      r"\textbf{Dataset} & \textbf{Method} & \textbf{Active Links} &"
+      r" \textbf{Bridges} & \textbf{MACs/Sample} & \textbf{Size (Bytes)} &"
+      r" \textbf{Train (s)} & \textbf{Infer (ms)} \\"
+  )
+  print(r"\midrule")
+
+  for ds_name, ds_res in all_results.items():
+    for idx_m, m in enumerate(models_order):
+      ds_col = f"\\multirow{{4}}{{*}}{{\\textbf{{{ds_name}}}}}" if idx_m == 0 else ""
+      links = np.mean(ds_res[m]["links"])
+      br = np.mean(ds_res[m]["bridges"])
+      macs = np.mean(ds_res[m]["macs"])
+      b_sz = np.mean(ds_res[m]["bytes"])
+      tr_s = np.mean(ds_res[m]["train_s"])
+      inf_m = np.mean(ds_res[m]["inf_ms"])
+      print(
+          f"{ds_col} & {models_latex[m]} & {links:.1f} & {br:.1f} & {macs:.1f}"
+          f" & {b_sz:.0f} & {tr_s:.2f} & {inf_m:.3f} \\\\"
+      )
+    print(r"\midrule")
+  print(r"\bottomrule")
+  print(r"\end{tabular}}")
+  print(r"\end{table*}")
+
+  # ==========================================================================
+  # ВЫВОД ТАБЛИЦЫ 3: CONSTRUCTIVE SPARSITY (BEFORE VS AFTER POST-PRUNING)
+  # ==========================================================================
+  print("\n" + "%" * 90)
+  print(
+      "% TABLE 3: PRE-PRUNING VS POST-PRUNING STRUCTURAL PROFILE (COPY TO LATEX)"
+  )
+  print("%" * 90)
+  print(r"\begin{table}[t]")
+  print(r"\centering")
+  print(
+      r"\caption{Constructive sparsity of \texttt{OptimalCrossTowerAGNN}"
+      r" before and after final magnitude cleanup relative to dense MLP-32.}"
+  )
+  print(r"\label{tab:pre_post_pruning}")
+  print(r"\resizebox{\columnwidth}{!}{%")
+  print(r"\begin{tabular}{lcccc}")
+  print(r"\toprule")
+  print(
+      r"\textbf{Dataset} & \textbf{Dense MLP Links} & \textbf{Pre-Prune"
+      r" Links} & \textbf{Post-Prune Links} & \textbf{Compression} \\"
+  )
+  print(r"\midrule")
+  for ds_name, ds_res in all_results.items():
+    dense_l = np.mean(ds_res["MLP32"]["links"])
+    pre_l = np.mean(pre_post_prune[ds_name]["pre_links"])
+    post_l = np.mean(pre_post_prune[ds_name]["post_links"])
+    comp = dense_l / max(1.0, post_l)
     print(
-        f"Test Accuracy : {accuracy_score(y_te, preds):.4f} | Macro-F1 :"
-        f" {f1_score(y_te, preds, average='macro'):.4f}"
+        f"\\textbf{{{ds_name}}} & {dense_l:.0f} & {pre_l:.1f} & {post_l:.1f} &"
+        f" $\\mathbf{{{comp:.1f}\\times}}$ \\\\"
     )
-    print(
-        f"Активных связей: {stats['active_links']} (Межбашенных мостов:"
-        f" {stats['cross_tower_bridges']}, Башен: {stats['towers']}, Узлов:"
-        f" {stats['units']})"
-    )
-    print(
-        f"MACs / sample  : {stats['macs_per_sample']} | Размер модели:"
-        f" {stats['model_bytes']} байт"
-    )
-    print(
-        f"Время обучения : {train_sec:.2f} с | Инференс ({len(X_te)} объектов):"
-        f" {inf_ms:.3f} мс",
-        flush=True,
-    )
+  print(r"\bottomrule")
+  print(r"\end{tabular}}")
+  print(r"\end{table}")
+
+
+if __name__ == "__main__":
+  run_full_q2_benchmark()
