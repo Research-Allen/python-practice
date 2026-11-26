@@ -152,7 +152,7 @@ def golden_section_discrete_search(eval_fn, low, high):
 
 
 # ==============================================================================
-# 3. OptimalCrossTowerAGNN (FINAL v2.2 + ABLATION HOOKS)
+# 3. OptimalCrossTowerAGNN (FINAL v2.3)
 # ==============================================================================
 class OptimalCrossTowerAGNN:
 
@@ -421,8 +421,9 @@ class OptimalCrossTowerAGNN:
           centers[:, None, :] - centers[None, :, :], axis=2
       )
       nonzero = pair_dists[pair_dists > 0]
+      # [PATCH v2.3] Bounded sigma_zone in [0.5, 5.0]
       sigma_zone = (
-          max(0.5, float(np.percentile(nonzero, 30)))
+          float(np.clip(np.percentile(nonzero, 30), 0.5, 5.0))
           if len(nonzero) > 0
           else 1.0
       )
@@ -690,7 +691,8 @@ class OptimalCrossTowerAGNN:
           continue
 
         num = np.mean(a_src * dz_dst)
-        grad_score = abs(float(num / (std_src * std_dst)))
+        # [PATCH v2.3] Upper cap of 10.0 on normalized bridge score
+        grad_score = min(abs(float(num / (std_src * std_dst))), 10.0)
 
         level_bonus = 1.25 if u_src["level"] == u_dst["level"] else 1.0
         bridge_candidates.append(
@@ -1320,7 +1322,7 @@ def run_full_q2_benchmark():
       X_tr, X_te = sc.fit_transform(X[tr]), sc.transform(X[te])
       y_tr, y_te = y[tr], y[te]
 
-      # 1. OptimalCrossTowerAGNN (v2.2)
+      # 1. OptimalCrossTowerAGNN (v2.3)
       t0 = time.perf_counter()
       agnn = OptimalCrossTowerAGNN(
           output_dim=out_dim,
@@ -1354,7 +1356,6 @@ def run_full_q2_benchmark():
       pre_post_prune[ds_name]["post_links"].append(st_agnn["active_links"])
       pre_post_prune[ds_name]["test_acc"].append(accuracy_score(y_te, p_agnn))
 
-      # Optional Ablation Variants on Two Spirals & UCI Digits
       if run_ablation:
         agnn_omp = OptimalCrossTowerAGNN(
             output_dim=out_dim,
