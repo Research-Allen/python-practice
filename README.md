@@ -191,6 +191,7 @@ No setup needed. Each badge opens the file in a free online Python editor and ru
 | File | |
 | --- | --- |
 | [`AGNN.py`](./AGNN.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/AGNN.py) |
+| [`GoldeVSsipelMethodVSoptim.py`](./GoldeVSsipelMethodVSoptim.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/GoldeVSsipelMethodVSoptim.py) |
 | [`Sensitivity-to-max_axes.py`](./Sensitivity-to-max_axes.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/Sensitivity-to-max_axes.py) |
 | [`TEST-AGNN.py`](./TEST-AGNN.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/TEST-AGNN.py) |
 | [`TestBestIsGolen.py`](./TestBestIsGolen.py) | [![Run in Python Compiler](https://pythoncompiler.io/badge-run.svg)](https://pythoncompiler.io/?gh=Research-Allen/python-practice/main/TestBestIsGolen.py) |
